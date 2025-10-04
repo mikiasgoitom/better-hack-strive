@@ -1,0 +1,137 @@
+{
+  "title": "Create Admin User",
+  "description": "Provide credentials and assign the admin to an organization.",
+  "endpoint": "/api/admins",
+  "method": "POST",
+  "headers": {
+    "X-Client": "dashboard"
+  },
+  "fields": [
+    {
+      "name": "email",
+      "type": "email",
+      "label": "Email address",
+      "placeholder": "admin@example.com",
+      "dataType": "string",
+      "validation": {
+        "required": "Email is required",
+        "email": true
+      },
+      "layout": { "colSpan": 6, "order": 1 }
+    },
+    {
+      "name": "password",
+      "type": "password",
+      "label": "Password",
+      "placeholder": "••••••••",
+      "isPassword": true,
+      "dataType": "string",
+      "validation": {
+        "required": "Choose a strong password",
+        "minLength": 12
+      },
+      "attributes": {
+        "autoComplete": "new-password"
+      },
+      "layout": { "colSpan": 6, "order": 2 }
+    },
+    {
+      "name": "confirmPassword",
+      "type": "password",
+      "label": "Confirm password",
+      "placeholder": "Re-enter password",
+      "dataType": "string",
+      "validation": {
+        "required": true,
+        "sameAs": "password"
+      },
+      "layout": { "colSpan": 6, "order": 3 }
+    },
+    {
+      "name": "organizationId",
+      "type": "select",
+      "label": "Organization",
+      "placeholder": "Search organizations…",
+      "description": "Start typing to load matching organizations.",
+      "dataType": "enum",
+      "dataSource": {
+        "type": "remote",
+        "endpoint": "/api/organizations",
+        "method": "GET",
+        "queryParam": "search",
+        "debounceMs": 250,
+        "pagination": {
+          "mode": "infinite",
+          "pageSize": 25,
+          "pageParam": "page",
+          "labelKey": "name",
+          "valueKey": "id",
+          "hasMoreKey": "hasMore"
+        },
+        "cacheTtlMs": 60000
+      },
+      "validation": {
+        "required": "Please pick an organization"
+      },
+      "layout": { "colSpan": 6, "order": 4 }
+    },
+    {
+      "name": "phone",
+      "type": "text",
+      "label": "Phone number",
+      "placeholder": "+1 555 123 4567",
+      "dataType": "string",
+      "validation": {
+        "pattern": "^\\+?[0-9\\s-]{10,15}$"
+      },
+      "visibleWhen": [
+        {
+          "field": "organizationId",
+          "operator": "exists"
+        }
+      ],
+      "layout": { "colSpan": 6, "order": 5 }
+    },
+    {
+      "name": "permissions",
+      "type": "multiselect",
+      "label": "Permissions",
+      "dataType": "array",
+      "options": [
+        { "value": "manage_users", "label": "Manage users" },
+        { "value": "manage_billing", "label": "Manage billing" },
+        { "value": "view_reports", "label": "View reports" }
+      ],
+      "maxSelections": 2,
+      "layout": { "colSpan": 12, "order": 6 }
+    },
+    {
+      "name": "receiveUpdates",
+      "type": "toggle",
+      "label": "Receive product updates",
+      "dataType": "boolean",
+      "defaultValue": true,
+      "layout": { "colSpan": 12, "order": 7 }
+    }
+  ],
+  "submit": {
+    "label": "Create admin",
+    "icon": "save",
+    "loadingText": "Creating…",
+    "successMessage": "Admin account created successfully",
+    "errorMessage": "Failed to create admin",
+    "confirmDialog": {
+      "title": "Create admin?",
+      "message": "This will send a welcome email to the new admin.",
+      "confirmLabel": "Create",
+      "cancelLabel": "Cancel"
+    }
+  },
+  "onSuccessRedirect": "/admin/users",
+  "onSuccessMessage": "We just emailed the new admin with setup instructions.",
+  "onErrorMessage": "Please resolve the highlighted issues and try again.",
+  "draft": {
+    "autosave": true,
+    "intervalMs": 15000
+  }
+}
