@@ -1,7 +1,6 @@
-import { parseFormConfig } from "@better-forms-strive/core";
-import type { FormConfigInput } from "@better-forms-strive/core";
+import type { FormConfig } from "@better-forms-strive/core";
 
-const signInFormJson: FormConfigInput = {
+export const signInFormConfig: FormConfig = {
   title: "Welcome back",
   description: "Use your company credentials to access the dashboard.",
   endpoint: "/api/sign-in",
@@ -90,6 +89,4 @@ const signInFormJson: FormConfigInput = {
       progressLabel: "Step 3 of 3",
     },
   ],
-};
-
-export const signInFormConfig = parseFormConfig(signInFormJson);
+} satisfies FormConfig;
