@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 import type {
   FormConfig,
   FormField,
+  FormStep,
   StaticOption,
   VisibilityRule,
 } from "@/types/form.types";
@@ -281,6 +282,69 @@ export const FormBuilder = ({
     () => buildBackendValidator(normalizedConfig),
     [normalizedConfig]
   );
+  const steps = useMemo<FormStep[]>(() => {
+    const base: FormStep[] =
+      normalizedConfig.steps && normalizedConfig.steps.length > 0
+        ? normalizedConfig.steps
+        : [
+            {
+              id: "__all__",
+              title: normalizedConfig.title,
+              description: normalizedConfig.description,
+              fields: normalizedConfig.fields.map((field) => field.name),
+            },
+          ];
+
+    const sanitized = base
+      .map((step) => ({
+        ...step,
+        fields: step.fields.filter((fieldName) =>
+          normalizedConfig.fields.some((field) => field.name === fieldName)
+        ),
+      }))
+      .filter((step) => step.fields.length > 0);
+
+    if (sanitized.length === 0) {
+      return [
+        {
+          id: "__all__",
+          title: normalizedConfig.title,
+          description: normalizedConfig.description,
+          fields: normalizedConfig.fields.map((field) => field.name),
+        },
+      ];
+    }
+
+    return sanitized;
+  }, [normalizedConfig]);
+
+  const isMultiStep = normalizedConfig.steps !== undefined && steps.length > 1;
+
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+
+  useEffect(() => {
+    setCurrentStepIndex(0);
+  }, [steps]);
+
+  const currentStep = steps[currentStepIndex] ?? steps[0];
+
+  const fieldMap = useMemo(() => {
+    const map = new Map<string, FormField>();
+    normalizedConfig.fields.forEach((field) => {
+      map.set(field.name, field);
+    });
+    return map;
+  }, [normalizedConfig.fields]);
+
+  const fieldsForCurrentStep: FormField[] = useMemo(() => {
+    if (!currentStep) {
+      return normalizedConfig.fields;
+    }
+
+    return currentStep.fields
+      .map((fieldName) => fieldMap.get(fieldName))
+      .filter((field): field is FormField => Boolean(field));
+  }, [currentStep, fieldMap, normalizedConfig.fields]);
 
   type FormValues = z.infer<typeof schema>;
 
@@ -389,9 +453,7 @@ export const FormBuilder = ({
               {...commonProps}
               rows={field.rows}
               value={normalizeTextValue(rawValue)}
-              onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) =>
-                fieldProps.onChange(event.target.value)
-              }
+              onChange={(event) => fieldProps.onChange(event.target.value)}
             />
           );
         case "number":
@@ -421,12 +483,13 @@ export const FormBuilder = ({
               {...commonProps}
               disabled={field.disabled || optionsState.loading}
               value={normalizeTextValue(rawValue)}
-              onValueChange={(value) => {
-                if (value === "") {
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                if (nextValue === "") {
                   fieldProps.onChange(undefined);
                   return;
                 }
-                fieldProps.onChange(resolveOptionValue(value));
+                fieldProps.onChange(resolveOptionValue(nextValue));
               }}
             >
               <option value="" disabled={Boolean(field.validation?.required)}>
@@ -440,11 +503,8 @@ export const FormBuilder = ({
             </Select>
           );
         case "multiselect":
-          // shadcn/ui Select does not support multi-select out of the box.
-          // You should use a custom MultiSelect component here.
-          // For now, fallback to a native <select multiple> for demonstration.
           return (
-            <select
+            <Select
               {...commonProps}
               multiple
               disabled={field.disabled || optionsState.loading}
@@ -459,14 +519,14 @@ export const FormBuilder = ({
                 );
                 fieldProps.onChange(selected);
               }}
-              className="block w-full rounded border px-3 py-2 text-sm"
+              size={Math.min(optionsState.options.length || 3, 6)}
             >
               {optionsState.options.map((option) => (
                 <option key={String(option.value)} value={String(option.value)}>
                   {option.label}
                 </option>
               ))}
-            </select>
+            </Select>
           );
         case "checkbox":
           return (
@@ -489,12 +549,9 @@ export const FormBuilder = ({
         case "toggle":
           return (
             <Switch
-              aria-label={field.label ?? field.placeholder}
-              disabled={field.disabled}
               checked={Boolean(rawValue)}
-              onCheckedChange={(checked) =>
-                fieldProps.onChange(Boolean(checked))
-              }
+              onCheckedChange={(checked) => fieldProps.onChange(checked)}
+              disabled={field.disabled}
             />
           );
         case "radio":
@@ -574,6 +631,39 @@ export const FormBuilder = ({
   );
 
   const watchValues = form.watch();
+  const visibleFieldNames = fieldsForCurrentStep
+    .filter((field) =>
+      evaluateVisibility(
+        field.visibleWhen,
+        watchValues as FieldVisibilityValues
+      )
+    )
+    .map((field) => field.name);
+
+  const handleNext = async () => {
+    const validationTargets = (
+      visibleFieldNames.length
+        ? visibleFieldNames
+        : fieldsForCurrentStep.map((field) => field.name)
+    ) as Path<FormValues>[];
+
+    const isValid = await form.trigger(validationTargets, {
+      shouldFocus: true,
+    });
+
+    if (isValid) {
+      setCurrentStepIndex((prev) => Math.min(prev + 1, steps.length - 1));
+    }
+  };
+
+  const handlePrevious = () => {
+    setCurrentStepIndex((prev) => Math.max(prev - 1, 0));
+  };
+
+  const isLastStep = currentStepIndex === steps.length - 1;
+  const progressLabel = currentStep?.progressLabel
+    ? currentStep.progressLabel
+    : `Step ${Math.min(currentStepIndex + 1, steps.length)} of ${steps.length}`;
 
   return (
     <Form form={form} onSubmit={submitHandler} className="space-y-6">
@@ -581,20 +671,29 @@ export const FormBuilder = ({
         {normalizedConfig.title && (
           <h1 className="text-2xl font-semibold">{normalizedConfig.title}</h1>
         )}
-        {normalizedConfig.description && (
+        {isMultiStep && currentStep && (
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {progressLabel}
+          </p>
+        )}
+        {isMultiStep && currentStep?.title && (
+          <h2 className="text-lg font-medium">{currentStep.title}</h2>
+        )}
+        {(isMultiStep
+          ? currentStep?.description
+          : normalizedConfig.description) && (
           <p className="text-sm text-muted-foreground">
-            {normalizedConfig.description}
+            {isMultiStep
+              ? currentStep?.description ?? normalizedConfig.description
+              : normalizedConfig.description}
           </p>
         )}
       </div>
 
       <div className="grid gap-6 md:grid-cols-12">
-        {normalizedConfig.fields.map((field) => {
+        {fieldsForCurrentStep.map((field) => {
           const fieldError = form.formState.errors[field.name];
-          const isVisible = evaluateVisibility(
-            field.visibleWhen,
-            watchValues as FieldVisibilityValues
-          );
+          const isVisible = visibleFieldNames.includes(field.name);
 
           return (
             <FieldRenderer<FormValues>
@@ -620,15 +719,39 @@ export const FormBuilder = ({
         <p className="text-sm text-destructive">{submissionState.message}</p>
       )}
 
-      <Button
-        type="submit"
-        className="w-full"
-        disabled={form.formState.isSubmitting}
-      >
-        {form.formState.isSubmitting
-          ? normalizedConfig.submit.loadingText ?? "Submitting…"
-          : normalizedConfig.submit.label}
-      </Button>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        {isMultiStep && currentStepIndex > 0 && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handlePrevious}
+            disabled={form.formState.isSubmitting}
+          >
+            {currentStep?.previousLabel ?? "Back"}
+          </Button>
+        )}
+
+        {isLastStep ? (
+          <Button
+            type="submit"
+            className="w-full sm:ml-auto sm:w-auto"
+            disabled={form.formState.isSubmitting}
+          >
+            {form.formState.isSubmitting
+              ? normalizedConfig.submit.loadingText ?? "Submitting…"
+              : normalizedConfig.submit.label}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            className="w-full sm:ml-auto sm:w-auto"
+            onClick={handleNext}
+            disabled={form.formState.isSubmitting}
+          >
+            {currentStep?.nextLabel ?? "Next"}
+          </Button>
+        )}
+      </div>
     </Form>
   );
 };

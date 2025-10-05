@@ -112,6 +112,16 @@ export interface FormField {
   attributes?: Record<string, string | number | boolean>;
 }
 
+export interface FormStep {
+  id: string;
+  title?: string;
+  description?: string;
+  fields: string[];
+  nextLabel?: string;
+  previousLabel?: string;
+  progressLabel?: string;
+}
+
 export interface SubmitAction {
   label: string;
   icon?: string;
@@ -135,6 +145,7 @@ export interface FormConfig {
   headers?: Record<string, string>;
   authTokenRef?: string;
   fields: FormField[];
+  steps?: FormStep[];
   submit: SubmitAction;
   onSuccessRedirect?: string;
   onSuccessMessage?: string;

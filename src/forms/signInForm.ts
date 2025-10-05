@@ -19,6 +19,12 @@ const signInFormJson: FormConfigInput = {
       },
     },
     {
+      name: "age",
+      type: "number",
+      label: "Age",
+      placeholder: "Enter your age",
+    },
+    {
       name: "password",
       type: "password",
       label: "Password",
@@ -28,6 +34,19 @@ const signInFormJson: FormConfigInput = {
       validation: {
         required: "Password is required",
         minLength: 8,
+      },
+    },
+    {
+      name: "confirmPassword",
+      type: "password",
+      label: "Confirm Password",
+      placeholder: "Re-enter your password",
+      isPassword: true,
+      autoComplete: "current-password",
+      validation: {
+        required: "Confirm Password is required",
+        minLength: 8,
+        sameAs: "password",
       },
     },
     {
@@ -44,6 +63,33 @@ const signInFormJson: FormConfigInput = {
     successMessage: "Signed in successfully",
     errorMessage: "Unable to sign in with the provided credentials",
   },
+  steps: [
+    {
+      id: "credentials",
+      title: "Credentials",
+      description: "Enter your account email and password",
+      fields: ["email", "age"],
+      nextLabel: "Continue",
+      progressLabel: "Step 1 of 3",
+    },
+    {
+      id: "password verification",
+      title: "Password Verification",
+      description: "Verify your password",
+      fields: ["password", "confirmPassword"],
+      nextLabel: "Continue",
+      progressLabel: "Step 2 of 3",
+    },
+    {
+      id: "preferences",
+      title: "Preferences",
+      description: "Adjust sign-in preferences",
+      fields: ["rememberMe"],
+      previousLabel: "Back",
+      nextLabel: "Submit",
+      progressLabel: "Step 3 of 3",
+    },
+  ],
 };
 
 export const signInFormConfig = parseFormConfig(signInFormJson);

@@ -117,6 +117,18 @@ const layoutSchema = z.object({
   width: z.enum(["full", "half", "third"]).optional(),
 });
 
+const formStepSchema = z.object({
+  id: z.string().min(1, "Step id is required"),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  fields: z
+    .array(z.string().min(1))
+    .min(1, "Step must reference at least one field"),
+  nextLabel: z.string().optional(),
+  previousLabel: z.string().optional(),
+  progressLabel: z.string().optional(),
+});
+
 export const formFieldSchema = z
   .object({
     name: z.string().min(1, "Field name is required"),
@@ -214,6 +226,7 @@ export const formConfigSchema = z
     headers: z.record(z.string()).optional(),
     authTokenRef: z.string().optional(),
     fields: z.array(formFieldSchema).min(1, "At least one field is required"),
+    steps: z.array(formStepSchema).optional(),
     submit: submitActionSchema,
     onSuccessRedirect: z.string().optional(),
     onSuccessMessage: z.string().optional(),
@@ -249,6 +262,60 @@ export const formConfigSchema = z
         });
       }
     });
+
+    if (config.steps?.length) {
+      const stepIds = new Set<string>();
+      const referencedFields = new Set<string>();
+
+      config.steps.forEach((step, stepIndex) => {
+        if (stepIds.has(step.id)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Duplicate step id: ${step.id}`,
+            path: ["steps", stepIndex, "id"],
+          });
+        }
+        stepIds.add(step.id);
+
+        const localFieldSet = new Set<string>();
+        step.fields.forEach((fieldName, fieldIndex) => {
+          if (!fieldNames.has(fieldName)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Step references unknown field '${fieldName}'`,
+              path: ["steps", stepIndex, "fields", fieldIndex],
+            });
+            return;
+          }
+
+          if (referencedFields.has(fieldName)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Field '${fieldName}' is already assigned to a previous step`,
+              path: ["steps", stepIndex, "fields", fieldIndex],
+            });
+          }
+
+          if (localFieldSet.has(fieldName)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Field '${fieldName}' is listed more than once in step '${step.id}'`,
+              path: ["steps", stepIndex, "fields", fieldIndex],
+            });
+          }
+          localFieldSet.add(fieldName);
+          referencedFields.add(fieldName);
+        });
+      });
+
+      if (referencedFields.size === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Steps must reference at least one defined field",
+          path: ["steps"],
+        });
+      }
+    }
   });
 
 export type FormConfigInput = z.input<typeof formConfigSchema>;

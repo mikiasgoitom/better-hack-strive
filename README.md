@@ -65,6 +65,12 @@ export default function Page() {
 
 The builder automatically maps each `FormField` type to a matching shadcn-inspired control, enforces field visibility rules, hydrate default values, and fetches remote select options when a `dataSource` is defined.
 
+### Multi-step flows
+
+- Provide a `steps` array in your JSON to split a form into sequential screens. Each step lists the field `name`s it should render and optional UI labels (`title`, `description`, `progressLabel`, `nextLabel`, `previousLabel`).
+- Fields are validated step-by-step: moving forward triggers validation for the current step’s visible inputs only. The submit button only appears on the final step.
+- If you omit `steps`, the builder behaves as a single-step form while still honouring layout metadata.
+
 ### Adding new form fields
 
 Update `src/types/form.types.ts` to describe new field capabilities, then extend `formSchema.ts` and `formParser.ts` so runtime validation stays aligned with TypeScript types. Regenerate or tweak your JSON definitions afterwards.
