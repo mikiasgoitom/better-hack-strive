@@ -34,6 +34,9 @@ import type {
 
 interface FormBuilderProps {
   config: FormConfig;
+  onSubmitAction?: (data: Record<string, unknown>) => Promise<any>;
+  isSubmitting?: boolean;
+  submissionError?: string | null;
   onSubmitSuccess?: (data: Record<string, unknown>) => void;
   onSubmitError?: (error: unknown) => void;
 }
@@ -273,8 +276,11 @@ const FieldRenderer = <FormValues extends Record<string, unknown>>({
 
 export const FormBuilder = ({
   config,
-  onSubmitError,
+  onSubmitAction,
+  isSubmitting: isSubmittingProp,
+  submissionError: submissionErrorProp,
   onSubmitSuccess,
+  onSubmitError,
 }: FormBuilderProps) => {
   const router = useRouter();
   const normalizedConfig = useMemo(() => parseFormConfig(config), [config]);
@@ -376,13 +382,23 @@ export const FormBuilder = ({
     mode: "onSubmit",
   });
 
-  const [submissionState, setSubmissionState] = useState<
-    | { status: "idle" }
-    | { status: "success"; message?: string }
-    | { status: "error"; message?: string }
+  const [internalSubmissionState, setInternalSubmissionState] = useState<
+    { status: "idle" } | { status: "success"; message?: string } | { status: "error"; message?: string }
   >({ status: "idle" });
 
+  // Determine which state to use: the parent's prop or the internal state.
+  const isSubmitting = isSubmittingProp !== undefined ? isSubmittingProp : form.formState.isSubmitting;
+  //    - For the error message, prioritize the parent's prop.
+  const submissionError = submissionErrorProp ?? (internalSubmissionState.status === 'error' ? internalSubmissionState.message : null);
+  //    - For the success message, we can only rely on the internal state for now.
+  //      If you wanted the parent to control this, you'd add a `submissionSuccess` prop.
+  const submissionSuccessMessage = internalSubmissionState.status === 'success' ? internalSubmissionState.message : null;
+
   const submitHandler = form.handleSubmit(async (values) => {
+    if (onSubmitAction) {
+      await onSubmitAction(values);
+      return;
+    }
     try {
       const response = await fetch(normalizedConfig.endpoint, {
         method: normalizedConfig.method ?? "POST",
@@ -397,7 +413,7 @@ export const FormBuilder = ({
         throw new Error(`Request failed with status ${response.status}`);
       }
 
-      setSubmissionState({
+      setInternalSubmissionState({
         status: "success",
         message: normalizedConfig.submit.successMessage,
       });
@@ -407,7 +423,7 @@ export const FormBuilder = ({
         router.push(normalizedConfig.onSuccessRedirect);
       }
     } catch (error) {
-      setSubmissionState({
+      setInternalSubmissionState({
         status: "error",
         message:
           normalizedConfig.submit.errorMessage ??
@@ -712,11 +728,12 @@ export const FormBuilder = ({
         })}
       </div>
 
-      {submissionState.status === "success" && submissionState.message && (
-        <p className="text-sm text-green-600">{submissionState.message}</p>
+      {submissionSuccessMessage && (
+        <p className="text-sm text-green-600">{submissionSuccessMessage}</p>
       )}
-      {submissionState.status === "error" && submissionState.message && (
-        <p className="text-sm text-destructive">{submissionState.message}</p>
+
+      {submissionError && (
+        <p className="text-sm text-destructive">{submissionError}</p>
       )}
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
