@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { useRouter } from "next/navigation";
 import { Controller, useForm } from "react-hook-form";
 import type { Control, ControllerRenderProps, Path } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { createParser, useQueryState } from "nuqs";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -45,6 +46,41 @@ type FieldOptionsState = {
 };
 
 type FieldVisibilityValues = Record<string, unknown>;
+
+const sanitizeForKey = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const buildFormPersistenceKey = (config: FormConfig) => {
+  const base = [config.title, config.endpoint].filter(Boolean).join("-");
+  const sanitized = sanitizeForKey(base || "form");
+  return sanitized ? `form-${sanitized}` : "form-state";
+};
+
+const safeStringify = (value: unknown) => {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+};
+
+const valuesAreEqual = (a: unknown, b: unknown) => {
+  if (a === undefined && b === undefined) {
+    return true;
+  }
+
+  const aString = safeStringify(a);
+  const bString = safeStringify(b);
+
+  if (aString !== undefined || bString !== undefined) {
+    return aString === bString;
+  }
+
+  return Object.is(a, b);
+};
 
 const getColSpanClass = (field: FormField) => {
   if (field.layout?.colSpan) {
@@ -348,7 +384,12 @@ export const FormBuilder = ({
 
   type FormValues = z.infer<typeof schema>;
 
-  const defaultValues = useMemo(() => {
+  const persistenceKey = useMemo(
+    () => buildFormPersistenceKey(config),
+    [config]
+  );
+
+  const defaultValues = useMemo<Partial<FormValues>>(() => {
     const values: Record<string, unknown> = {};
 
     normalizedConfig.fields.forEach((field) => {
@@ -367,14 +408,104 @@ export const FormBuilder = ({
       }
     });
 
-    return values;
+    return values as Partial<FormValues>;
   }, [normalizedConfig]);
+
+  const formStateParser = useMemo(
+    () =>
+      createParser<Partial<FormValues>>({
+        parse: (value) => {
+          if (!value) {
+            return {};
+          }
+
+          try {
+            const parsed = JSON.parse(value);
+            return parsed && typeof parsed === "object"
+              ? (parsed as Partial<FormValues>)
+              : {};
+          } catch {
+            return {};
+          }
+        },
+        serialize: (value) => JSON.stringify(value ?? {}),
+        eq: (a, b) => valuesAreEqual(a ?? {}, b ?? {}),
+      })
+        .withDefault({})
+        .withOptions({
+          history: "replace",
+          shallow: true,
+          clearOnDefault: true,
+        }),
+    []
+  );
+
+  const [queryValues, setQueryValues] = useQueryState<Partial<FormValues>>(
+    persistenceKey,
+    formStateParser
+  );
+
+  const mergedInitialValues = useMemo(() => {
+    const base = {
+      ...(defaultValues as Record<string, unknown>),
+      ...(queryValues ?? {}),
+    };
+
+    return base as FormValues;
+  }, [defaultValues, queryValues]);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: defaultValues as FormValues,
+    defaultValues: mergedInitialValues,
     mode: "onSubmit",
   });
+
+  const skipQuerySync = useRef(false);
+  const lastDiffStringRef = useRef<string | undefined>(undefined);
+  const defaultsStringRef = useRef<string | undefined>(undefined);
+
+  const computeDiffFromDefaults = useCallback(
+    (values: Record<string, unknown>) => {
+      const diff: Record<string, unknown> = {};
+
+      normalizedConfig.fields.forEach((field) => {
+        if (field.type === "file") {
+          return;
+        }
+
+        const key = field.name;
+        const current = values[key];
+        const defaultValue = (defaultValues as Record<string, unknown>)[key];
+
+        if (!valuesAreEqual(current, defaultValue) && current !== undefined) {
+          diff[key] = current;
+        }
+      });
+
+      return diff as Partial<FormValues>;
+    },
+    [normalizedConfig.fields, defaultValues]
+  );
+
+  useEffect(() => {
+    const defaultsString = safeStringify(defaultValues) ?? "";
+    const mergedValues = {
+      ...(defaultValues as Record<string, unknown>),
+      ...(queryValues ?? {}),
+    } as FormValues;
+
+    const diff = computeDiffFromDefaults(mergedValues);
+    const diffString = safeStringify(diff) ?? "";
+    const previousDefaults = defaultsStringRef.current;
+    const previousDiff = lastDiffStringRef.current;
+
+    if (previousDefaults !== defaultsString || previousDiff !== diffString) {
+      defaultsStringRef.current = defaultsString;
+      skipQuerySync.current = true;
+      form.reset(mergedValues);
+      lastDiffStringRef.current = diffString;
+    }
+  }, [queryValues, defaultValues, form, computeDiffFromDefaults]);
 
   const [submissionState, setSubmissionState] = useState<
     | { status: "idle" }
@@ -631,6 +762,34 @@ export const FormBuilder = ({
   );
 
   const watchValues = form.watch();
+
+  useEffect(() => {
+    const currentValues = form.getValues();
+    const diff = computeDiffFromDefaults(currentValues);
+    const diffString = safeStringify(diff) ?? "";
+
+    if (skipQuerySync.current) {
+      skipQuerySync.current = false;
+      lastDiffStringRef.current = diffString;
+      return;
+    }
+
+    if (lastDiffStringRef.current === diffString) {
+      return;
+    }
+
+    lastDiffStringRef.current = diffString;
+    defaultsStringRef.current = safeStringify(defaultValues) ?? "";
+
+    setQueryValues(diff).catch(() => undefined);
+  }, [
+    form,
+    computeDiffFromDefaults,
+    setQueryValues,
+    watchValues,
+    defaultValues,
+  ]);
+
   const visibleFieldNames = fieldsForCurrentStep
     .filter((field) =>
       evaluateVisibility(
