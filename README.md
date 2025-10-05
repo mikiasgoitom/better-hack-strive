@@ -1,21 +1,102 @@
-## JSON-driven forms
+# JSON-driven forms (monorepo)
 
-This project experiments with describing complex forms as JSON documents that power both the UI and backend validation. The core pieces live under `src/lib`:
+This workspace hosts a playground Next.js app **and** a reusable package named `@better-forms-strive/core`. The package turns JSON descriptors into fully functional forms (UI + validation) that you can ship in any React project.
 
-- `formSchema.ts` – a Zod schema that validates raw JSON input and normalises defaults.
-- `formParser.ts` – helper utilities to parse JSON safely and construct backend validators from a `FormConfig`.
+```
+better-hack-strive/
+├── packages/
+│   └── better-form-core/   # Published package source
+└── src/                    # Next.js playground consuming the package
+```
 
-`sample-form.json` showcases a non-trivial admin creation form with:
+## `@better-forms-strive/core` package
 
-- Static and dynamic select fields (remote pagination, debounced queries, caching hints).
-- Rich validation metadata (required messages, regex, min/max constraints, cross-field `sameAs`).
-- Layout hints, conditional visibility rules, and submit button copy.
+Key exports (all from `@better-forms-strive/core`):
 
-### Parse a form definition
+- `FormBuilder` – renders JSON-driven forms with shadcn-inspired controls.
+- `parseFormConfig` – validates and normalises a raw JSON string/object into a `FormConfig`.
+- `buildBackendValidator` – produces a Zod schema mirroring the UI contract.
+- Prebuilt UI primitives (button, input, select, textarea, checkbox, switch) and TypeScript types.
+
+### Installation & build
+
+Inside this repo:
+
+```powershell
+npm install
+npm run build --workspace @better-forms-strive/core
+```
+
+In another project, install it as a local dependency or publish it to npm first. Once installed, usage looks like:
+
+```tsx
+import {
+  FormBuilder,
+  parseFormConfig,
+  buildBackendValidator,
+} from "@better-forms-strive/core";
+
+const config = parseFormConfig(formJson);
+const validator = buildBackendValidator(config);
+
+export function OnboardingForm() {
+  return <FormBuilder config={config} />;
+}
+
+export type OnboardingDto = typeof validator._type;
+```
+
+### JSON contract highlights
+
+`sample-form.json` demonstrates what the schema supports:
+
+- Static and remote selects (debounced search, pagination hints, caching metadata).
+- Rich validation rules: required messages, regex, min/max, cross-field `sameAs`, conditional visibility.
+- Layout and copy customisation (section titles, button labels, success/error messages).
+- Optional multi-step flows via `steps`, including per-step labels and previous/next button text.
+
+Because both the UI and backend validator derive from the same `FormConfig`, you get end-to-end type safety with minimal boilerplate.
+
+### Extending the schema
+
+To add a new field type:
+
+1. Extend the discriminated union in `packages/better-form-core/src/types/form.types.ts`.
+2. Mirror those changes in `packages/better-form-core/src/lib/formSchema.ts` so runtime validation matches the types.
+3. Update the switch in `packages/better-form-core/src/components/FormBuilder.tsx` to render the new control.
+
+## Playground app (Next.js)
+
+The playground under `src/app` demonstrates the package in action. Notable files:
+
+- `src/forms/signInForm.ts` – validated form config consumed by the UI.
+- `src/app/page.tsx` and `src/app/signin/page.tsx` – render the `FormBuilder` with the demo config.
+
+Start the dev server:
+
+```powershell
+npm run dev
+```
+
+When running `npm run dev`, editing any file under `src/app` hot-reloads the preview.
+
+## Scripts & workflows
+
+- `npm run dev` – Next.js dev server for the playground.
+- `npm run lint` – ESLint (ignores generated `dist/` artifacts).
+- `npm run build --workspace @better-forms-strive/core` – builds the reusable package with `tsup`.
+- `npm run build` – production build of the Next.js app (uses Turbopack).
+
+> ℹ️ Turbopack may emit a warning about multiple `package-lock.json` files if you have other workspaces checked out nearby. Either set `turbopack.root` in `next.config.ts` or remove extraneous lockfiles to silence it.
+
+## Backend validation example
 
 ```ts
 import { promises as fs } from "node:fs";
-import { parseFormConfig, buildBackendValidator } from "@/lib/formParser";
+import {
+  parseFormConfig,
+  buildBackendValidator,
+} from "@better-forms-strive/core";
 
 async function bootstrap() {
   const raw = await fs.readFile("sample-form.json", "utf-8");
@@ -23,7 +104,6 @@ async function bootstrap() {
   const config = parseFormConfig(raw);
   const validator = buildBackendValidator(config);
 
-  // Validate request payloads (e.g. inside an API route)
   const dto = validator.parse({
     email: "admin@example.com",
     password: "supersecret!!",
@@ -37,50 +117,10 @@ async function bootstrap() {
 }
 ```
 
-The validator is a `z.ZodObject`, so you can integrate it directly with API routes, Next.js Server Actions, tRPC routers, or any backend runtime where type-safe parsing matters.
+The validator is a standard Zod schema, making it easy to plug into API routes, server actions, tRPC routers, or any backend runtime that needs request validation.
 
-### Build a form UI from JSON (shadcn-styled)
+## Contributing
 
-1. **Describe your form** – create a JSON document or plain object that matches `FormConfigInput`. See `src/forms/signInForm.ts` for a complete example.
-2. **Validate and export** – call `parseFormConfig(yourJson)` and export the returned `FormConfig`. This guarantees the UI builder and backend parser read the same contract.
-3. **Render with `FormBuilder`** – import `FormBuilder` in a client or server component and pass the validated config. The builder wires the config to shadcn-style inputs (`input`, `select`, `textarea`, `checkbox`, `toggle`, etc.), applies layout hints, and mounts a `react-hook-form` instance with a Zod resolver generated by `buildBackendValidator`.
-4. **Handle submit** – by default the builder posts to `config.endpoint`, showing success/error messages from `config.submit`. You can also subscribe to the optional `onSubmitSuccess` / `onSubmitError` callbacks to run custom logic.
-
-Example (`app/page.tsx`):
-
-```tsx
-import { FormBuilder } from "@/components/FormBuilder";
-import { signInFormConfig } from "@/forms/signInForm";
-
-export default function Page() {
-  return (
-    <main className="flex min-h-screen items-center justify-center bg-background p-6">
-      <div className="w-full max-w-md space-y-6 rounded-xl border border-border bg-card p-6 shadow-sm">
-        <FormBuilder config={signInFormConfig} />
-      </div>
-    </main>
-  );
-}
-```
-
-The builder automatically maps each `FormField` type to a matching shadcn-inspired control, enforces field visibility rules, hydrate default values, and fetches remote select options when a `dataSource` is defined.
-
-### Multi-step flows
-
-- Provide a `steps` array in your JSON to split a form into sequential screens. Each step lists the field `name`s it should render and optional UI labels (`title`, `description`, `progressLabel`, `nextLabel`, `previousLabel`).
-- Fields are validated step-by-step: moving forward triggers validation for the current step’s visible inputs only. The submit button only appears on the final step.
-- If you omit `steps`, the builder behaves as a single-step form while still honouring layout metadata.
-
-### Adding new form fields
-
-Update `src/types/form.types.ts` to describe new field capabilities, then extend `formSchema.ts` and `formParser.ts` so runtime validation stays aligned with TypeScript types. Regenerate or tweak your JSON definitions afterwards.
-
----
-
-## Development flow
-
-- Install dependencies: `npm install`
-- Run the Next.js dev server: `npm run dev`
-- Type-check the project: `npx tsc --noEmit`
-
-The UI lives under `src/app`. Editing `app/page.tsx` while the dev server is running hot-reloads changes in the browser.
+1. Install dependencies: `npm install`
+2. Run linting and builds before committing: `npm run lint && npm run build --workspace @better-forms-strive/core`
+3. Prefer updating both types and runtime schemas together so the contract stays in sync.

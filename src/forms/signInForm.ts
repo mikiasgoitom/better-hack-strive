@@ -1,5 +1,5 @@
-import { parseFormConfig } from "@/lib/formParser";
-import type { FormConfigInput } from "@/lib/formSchema";
+import { parseFormConfig } from "@better-forms-strive/core";
+import type { FormConfigInput } from "@better-forms-strive/core";
 
 const signInFormJson: FormConfigInput = {
   title: "Welcome back",
