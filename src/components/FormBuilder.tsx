@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { useRouter } from "next/navigation";
 import { Controller, useForm } from "react-hook-form";
 import type { Control, ControllerRenderProps, Path } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { createParser, useQueryState } from "nuqs";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -48,6 +49,41 @@ type FieldOptionsState = {
 };
 
 type FieldVisibilityValues = Record<string, unknown>;
+
+const sanitizeForKey = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const buildFormPersistenceKey = (config: FormConfig) => {
+  const base = [config.title, config.endpoint].filter(Boolean).join("-");
+  const sanitized = sanitizeForKey(base || "form");
+  return sanitized ? `form-${sanitized}` : "form-state";
+};
+
+const safeStringify = (value: unknown) => {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+};
+
+const valuesAreEqual = (a: unknown, b: unknown) => {
+  if (a === undefined && b === undefined) {
+    return true;
+  }
+
+  const aString = safeStringify(a);
+  const bString = safeStringify(b);
+
+  if (aString !== undefined || bString !== undefined) {
+    return aString === bString;
+  }
+
+  return Object.is(a, b);
+};
 
 const getColSpanClass = (field: FormField) => {
   if (field.layout?.colSpan) {
@@ -354,7 +390,12 @@ export const FormBuilder = ({
 
   type FormValues = z.infer<typeof schema>;
 
-  const defaultValues = useMemo(() => {
+  const persistenceKey = useMemo(
+    () => buildFormPersistenceKey(config),
+    [config]
+  );
+
+  const defaultValues = useMemo<Partial<FormValues>>(() => {
     const values: Record<string, unknown> = {};
 
     normalizedConfig.fields.forEach((field) => {
@@ -373,32 +414,138 @@ export const FormBuilder = ({
       }
     });
 
-    return values;
+    return values as Partial<FormValues>;
   }, [normalizedConfig]);
+
+  // --- FROM THE 'nuqs' (origin/mikiasgoitom/added-nuqs) BRANCH ---
+  const formStateParser = useMemo(
+    () =>
+      createParser<Partial<FormValues>>({
+        parse: (value) => {
+          if (!value) {
+            return {};
+          }
+          try {
+            const parsed = JSON.parse(value);
+            return parsed && typeof parsed === "object"
+              ? (parsed as Partial<FormValues>)
+              : {};
+          } catch {
+            return {};
+          }
+        },
+        serialize: (value) => JSON.stringify(value ?? {}),
+        eq: (a, b) => valuesAreEqual(a ?? {}, b ?? {}),
+      })
+        .withDefault({})
+        .withOptions({
+          history: "replace",
+          shallow: true,
+          clearOnDefault: true,
+        }),
+    []
+  );
+
+  const [queryValues, setQueryValues] = useQueryState<Partial<FormValues>>(
+    "formState", // Using a consistent key like "formState"
+    formStateParser
+  );
+
+  const mergedInitialValues = useMemo(() => {
+    const base = {
+      ...(defaultValues as Record<string, unknown>),
+      ...(queryValues ?? {}),
+    };
+    return base as FormValues;
+  }, [defaultValues, queryValues]);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: defaultValues as FormValues,
+    defaultValues: mergedInitialValues,
     mode: "onSubmit",
   });
 
+  // --- MERGED LOGIC: Combine state management from both branches ---
+
+  // Internal state for fallback submission behavior (from the HEAD branch)
   const [internalSubmissionState, setInternalSubmissionState] = useState<
     { status: "idle" } | { status: "success"; message?: string } | { status: "error"; message?: string }
   >({ status: "idle" });
 
-  // Determine which state to use: the parent's prop or the internal state.
+  // Determine which state to use for UI feedback (from the HEAD branch)
   const isSubmitting = isSubmittingProp !== undefined ? isSubmittingProp : form.formState.isSubmitting;
-  //    - For the error message, prioritize the parent's prop.
   const submissionError = submissionErrorProp ?? (internalSubmissionState.status === 'error' ? internalSubmissionState.message : null);
-  //    - For the success message, we can only rely on the internal state for now.
-  //      If you wanted the parent to control this, you'd add a `submissionSuccess` prop.
   const submissionSuccessMessage = internalSubmissionState.status === 'success' ? internalSubmissionState.message : null;
 
+  // Refs and effects for syncing form state with URL query (from the 'nuqs' branch)
+  const skipQuerySync = useRef(false);
+  const lastDiffStringRef = useRef<string | undefined>(undefined);
+  const defaultsStringRef = useRef<string | undefined>(undefined);
+
+  const computeDiffFromDefaults = useCallback(
+    (values: Record<string, unknown>) => {
+      const diff: Record<string, unknown> = {};
+      normalizedConfig.fields.forEach((field) => {
+        if (field.type === "file") {
+          return;
+        }
+        const key = field.name;
+        const current = values[key];
+        const defaultValue = (defaultValues as Record<string, unknown>)[key];
+        if (!valuesAreEqual(current, defaultValue) && current !== undefined) {
+          diff[key] = current;
+        }
+      });
+      return diff as Partial<FormValues>;
+    },
+    [normalizedConfig.fields, defaultValues]
+  );
+  
+  // Effect to reset form when URL query or defaults change (from 'nuqs' branch)
+  useEffect(() => {
+    const defaultsString = safeStringify(defaultValues) ?? "";
+    const mergedValues = {
+      ...(defaultValues as Record<string, unknown>),
+      ...(queryValues ?? {}),
+    } as FormValues;
+
+    const diff = computeDiffFromDefaults(mergedValues);
+    const diffString = safeStringify(diff) ?? "";
+    const previousDefaults = defaultsStringRef.current;
+    const previousDiff = lastDiffStringRef.current;
+
+    if (previousDefaults !== defaultsString || previousDiff !== diffString) {
+      defaultsStringRef.current = defaultsString;
+      skipQuerySync.current = true;
+      form.reset(mergedValues);
+      lastDiffStringRef.current = diffString;
+    }
+  }, [queryValues, defaultValues, form, computeDiffFromDefaults]);
+
+  // Effect to subscribe to form value changes and update the URL query (from 'nuqs' branch)
+  useEffect(() => {
+    const subscription = form.watch((values) => {
+      if (skipQuerySync.current) {
+        skipQuerySync.current = false;
+        return;
+      }
+      const diff = computeDiffFromDefaults(values as Record<string, unknown>);
+      setQueryValues(diff);
+      lastDiffStringRef.current = safeStringify(diff);
+    });
+    return () => subscription.unsubscribe();
+  }, [form, setQueryValues, computeDiffFromDefaults]);
+
+
+  // --- MERGED SUBMIT HANDLER ---
+  // This combines the logic from both branches.
   const submitHandler = form.handleSubmit(async (values) => {
+    // Logic from the HEAD branch (parent on submit)
     if (onSubmitAction) {
       await onSubmitAction(values);
       return;
     }
+    
     try {
       const response = await fetch(normalizedConfig.endpoint, {
         method: normalizedConfig.method ?? "POST",
@@ -647,6 +794,34 @@ export const FormBuilder = ({
   );
 
   const watchValues = form.watch();
+
+  useEffect(() => {
+    const currentValues = form.getValues();
+    const diff = computeDiffFromDefaults(currentValues);
+    const diffString = safeStringify(diff) ?? "";
+
+    if (skipQuerySync.current) {
+      skipQuerySync.current = false;
+      lastDiffStringRef.current = diffString;
+      return;
+    }
+
+    if (lastDiffStringRef.current === diffString) {
+      return;
+    }
+
+    lastDiffStringRef.current = diffString;
+    defaultsStringRef.current = safeStringify(defaultValues) ?? "";
+
+    setQueryValues(diff).catch(() => undefined);
+  }, [
+    form,
+    computeDiffFromDefaults,
+    setQueryValues,
+    watchValues,
+    defaultValues,
+  ]);
+
   const visibleFieldNames = fieldsForCurrentStep
     .filter((field) =>
       evaluateVisibility(
